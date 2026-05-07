@@ -17,25 +17,34 @@ class VAE(nn.Module):
     def __init__(self) -> None:
         super().__init__()
 
+        # 3 tasks so yeah
+        self.s1 = nn.Parameter(torch.tensor([0], dtype=torch.float), requires_grad=True)
+        self.s2 = nn.Parameter(torch.tensor([0], dtype=torch.float), requires_grad=True)
+        self.s3 = nn.Parameter(torch.tensor([0], dtype=torch.float), requires_grad=True)
+
         self.encoder = nn.Sequential(
-            nn.Conv2d(in_channels=1, out_channels=128, kernel_size=4, stride=2, padding=1), # 256x256 -> 128x128
+            nn.Conv2d(in_channels=3, out_channels=128, kernel_size=4, stride=2, padding=1), # 256x256 -> 128x128
             nn.LeakyReLU(),
             nn.Conv2d(in_channels=128, out_channels=256, kernel_size=4, stride=2, padding=1), # 128x128 -> 64x64
             nn.LeakyReLU(),
             nn.Conv2d(in_channels=256, out_channels=512, kernel_size=4, stride=2, padding=1), # 64x64 -> 32x32
             nn.LeakyReLU(),
-            nn.Conv2d(in_channels=512, out_channels=8, kernel_size=3, stride=1, padding=1) # 512 -> 8
+        )
+
+        self.bottleneck = nn.Sequential(
+            nn.Conv2d(in_channels=512, out_channels=32, kernel_size=3, stride=1, padding=1), # 512 -> 32
+            nn.LeakyReLU()
         )
 
         self.decoder = nn.Sequential(
-            nn.Conv2d(in_channels=4, out_channels=512, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=16, out_channels=512, kernel_size=3, stride=1, padding=1),
             nn.LeakyReLU(),
             nn.ConvTranspose2d(in_channels=512, out_channels=256, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(),
             nn.ConvTranspose2d(in_channels=256, out_channels=128, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(),
-            nn.ConvTranspose2d(in_channels=128, out_channels=1, kernel_size=4, stride=2, padding=1),
-            nn.Sigmoid()
+            nn.ConvTranspose2d(in_channels=128, out_channels=3, kernel_size=4, stride=2, padding=1),
+            nn.Tanh()
         )
 
     def forward(self, x):
@@ -46,7 +55,8 @@ class VAE(nn.Module):
 
     def encode(self, x):
         emb = self.encoder(x) # (8, 32, 32)
-        mu, log_var = torch.chunk(emb, 2, dim=1)
+        bottleneck = self.bottleneck(emb)
+        mu, log_var = torch.chunk(bottleneck, 2, dim=1)
         return mu, log_var
 
     def reparameterize(self, mu, log_var):
@@ -58,8 +68,8 @@ class VAE(nn.Module):
     def decode(self, x):
         return self.decoder(x)
 
-    def get_last_layer(self):
-        return self.decoder[-2].weight # Ignore sigmoid layer
+    # def get_last_layer(self):
+    #     return self.decoder[-2].weight # Ignore sigmoid layer
 
 class Discriminator(nn.Module):
     def __init__(self) -> None:
@@ -82,17 +92,47 @@ class Discriminator(nn.Module):
     def forward(self, x):
         return self.model(x)
 
+# class MyDataset(Dataset):
+#     def __init__(self, files, transform) -> None:
+#         self.files = files
+#         self.transform = transform
+#     def __getitem__(self, index) -> torch.Tensor:
+#         image = read_image(self.files[index], mode=ImageReadMode.UNCHANGED)
+#         image_tensor = self.transform(image)
+#         return image_tensor
+#     def __len__(self):
+#         return len(self.files)
+
+
+import rasterio as rs
 class MyDataset(Dataset):
     def __init__(self, files, transform) -> None:
         self.files = files
         self.transform = transform
     def __getitem__(self, index) -> torch.Tensor:
-        image = read_image(self.files[index], mode=ImageReadMode.UNCHANGED)
-        image_tensor = self.transform(image)
+        norm, flow, tpi = self.files[index]
+
+        norm = rs.open(norm).read()
+        flow = rs.open(flow).read()
+        tpi = rs.open(tpi).read()
+
+        norm = torch.tensor(norm)
+
+        flow = torch.tensor(flow)
+        flow = flow.clamp(min=torch.quantile(flow, q=0.02), max=torch.quantile(flow, q=0.98))
+        flow = torch.log1p(flow)
+        flow = (flow - flow.min()) / (flow.max() - flow.min())
+        flow = flow * 2 - 1
+
+        tpi = torch.tensor(tpi)
+        tpi = tpi.clamp(min=torch.quantile(tpi, q=0.02), max=torch.quantile(tpi, q=0.98))
+        tpi = (tpi - tpi.min()) / (tpi.max() - tpi.min())
+        tpi = tpi * 2 - 1
+
+        image_tensor = self.transform(torch.cat([norm, flow, tpi], dim=0))
         return image_tensor
     def __len__(self):
         return len(self.files)
-
 
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -103,29 +143,30 @@ if __name__ == "__main__":
         v2.ToDtype(torch.float32, scale=True)
     ])
 
-    BASE_DIR = "data/stage1_global_z10"
-    files = [os.path.join(BASE_DIR, file) for file in os.listdir(BASE_DIR)[:15000]]
+    # BASE_DIR = "data/stage1_global_z10"
+
+    NORM_DIR = './data/stage1_norm'
+    FLOW_DIR = './data/stage1_flow'
+    TPI_DIR  = './data/stage1_tpi'
+    files = [(os.path.join(NORM_DIR, file), os.path.join(FLOW_DIR, file), os.path.join(TPI_DIR, file)) for file in os.listdir(NORM_DIR) if file.endswith('.tif')]
     dataset = MyDataset(files, data_transforms)
-    loader = DataLoader(dataset, batch_size=32, num_workers=8, prefetch_factor=4, shuffle=True, drop_last=True)
+    loader = DataLoader(dataset, batch_size=32, num_workers=4, prefetch_factor=4, shuffle=True, drop_last=True)
 
 
     vae = VAE().train().to(device)
-    disc = Discriminator().train().to(device)
 
 
     epoch = 0
     total_epochs = 50
     warmup_epochs = 20
-    disc_epochs = 20
 
     l1_loss = nn.L1Loss()
     l2_loss = nn.MSELoss()
     l1_weight = 0.8
 
 
-    kl_weight = 1e-5
+    kl_weight = 0.01
     optim_vae = optim.Adam(vae.parameters(), lr=1e-4, betas=(0.5, 0.9))
-    optim_disc = optim.AdamW(disc.parameters(), lr=1e-4, betas=(0.5, 0.9))
 
 
     vae_warmup_scheduler = LinearLR(optim_vae, start_factor=0.01, total_iters=warmup_epochs)
@@ -136,18 +177,7 @@ if __name__ == "__main__":
         milestones=[warmup_epochs]
     )
 
-
-    def calculate_adaptive_gan_weight(recon_loss, gan_loss, vae_last_layer):
-        recon_grads = torch.autograd.grad(recon_loss, vae_last_layer, retain_graph=True)[0]
-        disc_grads = torch.autograd.grad(gan_loss, vae_last_layer, retain_graph=True)[0]
-
-        d_weight = torch.norm(recon_grads) / torch.norm(disc_grads + 1e-4)
-        d_weight = torch.clamp(d_weight, 0.0, 1e4).detach()
-
-        return d_weight
-
-
-    checkpoint = torch.load("./checkpoints/VAE_20.pth", weights_only=False)
+    checkpoint = torch.load("./checkpoints/VAE_40.pth", weights_only=False)
     vae.load_state_dict(checkpoint["vae_state_dict"])
     optim_vae.load_state_dict(checkpoint["optim_vae_state_dict"])
     vae_scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
@@ -166,80 +196,88 @@ if __name__ == "__main__":
 
             images = images.to(device)
             recons, mu, log_var = vae(images)
+            # norm_recon, flow_recon, tpi_recon = recons
 
-            recon_loss = l1_weight * l1_loss(recons, images) \
-                       + (1 - l1_weight) * l2_loss(recons, images)
+            norm_orig = images[:, 0:1]
+            flow_orig = images[:, 1:2]
+            tpi_orig = images[:, 2:3]
+
+            norm_recon = recons[:, 0:1]
+            flow_recon = recons[:, 1:2]
+            tpi_recon = recons[:, 2:3]
+
+            norm_loss = l1_weight * l1_loss(norm_recon, norm_orig) + (1 - l1_weight) * l2_loss(norm_recon, norm_orig)
+            flow_loss = l1_weight * l1_loss(flow_recon, flow_orig) + (1 - l1_weight) * l2_loss(flow_recon, flow_orig)
+            tpi_loss = l1_weight * l1_loss(tpi_recon, tpi_orig) + (1 - l1_weight) * l2_loss(tpi_recon, tpi_orig)
+
+            norm_loss = 0.5*torch.exp(-vae.s1) * norm_loss + 0.5*vae.s1
+            flow_loss = 0.5*torch.exp(-vae.s2) * flow_loss + 0.5*vae.s2
+            tpi_loss = 0.5*torch.exp(-vae.s3) * tpi_loss + 0.5*vae.s3
+
+            norm_loss = norm_loss.mean()
+            flow_loss = flow_loss.mean()
+            tpi_loss = tpi_loss.mean()
+            
             kl_loss = -0.5 * torch.mean(1 + log_var - mu.pow(2) - log_var.exp())
+            mtl_loss = norm_loss + flow_loss + tpi_loss
+            vae_loss = mtl_loss + kl_weight * kl_loss
 
-            if epoch >= disc_epochs:
-                disc_logits = disc(recons)
-                gan_loss = F.binary_cross_entropy_with_logits(disc_logits, torch.ones_like(disc_logits))
-                disc_weight = calculate_adaptive_gan_weight(recon_loss, gan_loss, vae.get_last_layer())
-                vae_loss_without_gan = recon_loss \
-                    + kl_weight * kl_loss \
-
-                vae_loss = vae_loss_without_gan \
-                    + disc_weight * gan_loss
-            else:
-                vae_loss = recon_loss + kl_weight * kl_loss
-            # vae_loss = recon_loss + kl_weight * kl_loss
-
-            vae_loss_without_gan_val = vae_loss_without_gan.item()
             vae_loss_val = vae_loss.item()
             total_vae_loss += vae_loss_val
-            total_vae_loss_without_gan += vae_loss_without_gan_val
 
             vae_loss.backward()
             optim_vae.step()
 
-
-            # Discriminator training
-
-            if epoch >= disc_epochs:
-                optim_disc.zero_grad()
-
-                disc_logits_fake = disc(recons.detach())
-                disc_loss_fake = F.binary_cross_entropy_with_logits(disc_logits_fake, torch.zeros_like(disc_logits_fake))
-
-                disc_logits_real = disc(images.detach())
-                disc_loss_real = F.binary_cross_entropy_with_logits(disc_logits_real, torch.ones_like(disc_logits_real))
-
-                disc_loss = (disc_loss_fake + disc_loss_real) / 2
-
-                disc_loss_val = disc_loss.item()
-                total_disc_loss += disc_loss_val
-
-                disc_loss.backward()
-                optim_disc.step()
-
             if batch_idx % 20 == 0:
                 print(f"Batch {batch_idx}/{len(loader)}:")
-                print(f"VAE Loss (w/o GAN) = {vae_loss_without_gan_val}. VAE Loss (w/ GAN) = {vae_loss_val}.")
-                print(f"Discriminator Loss = {disc_loss_val}", end="\n\n")
+                print(f"VAE Loss = {vae_loss_val}.")
+                print(f"Height Loss = {norm_loss.item()}")
+                print(f"Height (sigma) = {vae.s1.item()}")
+                print(f"Flow Loss = {flow_loss.item()}")
+                print(f"Flow (sigma) = {vae.s2.item()}")
+                print(f"TPI Loss = {tpi_loss.item()}")
+                print(f"TPI (sigma) = {vae.s3.item()}")
 
         vae_scheduler.step()
-        print(f"Avg VAE loss (w/o GAN) = {total_vae_loss_without_gan / len(loader)}", end="\n\n")
-        print(f"Avg VAE loss (w/ GAN) = {total_vae_loss / len(loader)}", end="\n\n")
-        print(f"Avg Discriminator loss = {total_disc_loss / len(loader)}", end="\n\n")
+        print(f"Avg VAE loss = {total_vae_loss / len(loader)}", end="\n\n")
 
         if epoch % 5 == 0:
             print(f"Saving checkpoint 'VAE_{epoch}.pth'")
-            
-            orig_tensor = images[0].detach().cpu().squeeze(0).numpy()
-            orig_16 = np.clip(orig_tensor * 65535.0, 0, 65535).astype(np.uint16)
-            Image.fromarray(orig_16).save(f"./visualisations/e{epoch}_original.png")
+            norm_orig_16 = norm_orig[0].squeeze(0)
+            norm_orig_16 = ((norm_orig_16 - norm_orig_16.min()) / (norm_orig_16.max() - norm_orig_16.min())).detach().cpu().numpy()
+            norm_orig_16 = np.clip(norm_orig_16 * 65535.0, 0, 65535).astype(np.uint16)
+            Image.fromarray(norm_orig_16).save(f"./visualisations/e{epoch}_norm_original.png")
 
-            recon_tensor = recons[0].detach().cpu().squeeze(0).numpy()
-            recon_16 = np.clip(recon_tensor * 65535.0, 0, 65535).astype(np.uint16)
-            Image.fromarray(recon_16).save(f"./visualisations/e{epoch}_recon.png")
+            norm_recon_16 = norm_recon[0].squeeze(0)
+            norm_recon_16 = ((norm_recon_16 - norm_recon_16.min()) / (norm_recon_16.max() - norm_recon_16.min())).detach().cpu().numpy()
+            norm_recon_16 = np.clip(norm_recon_16 * 65535.0, 0, 65535).astype(np.uint16)
+            Image.fromarray(norm_recon_16).save(f"./visualisations/e{epoch}_norm_reconstruction.png")
+            
+            flow_orig_16 = flow_orig[0].squeeze(0)
+            flow_orig_16 = ((flow_orig_16 - flow_orig_16.min()) / (flow_orig_16.max() - flow_orig_16.min())).detach().cpu().numpy()
+            flow_orig_16 = np.clip(flow_orig_16 * 65535.0, 0, 65535).astype(np.uint16)
+            Image.fromarray(flow_orig_16).save(f"./visualisations/e{epoch}_flow_original.png")
+
+            flow_recon_16 = flow_recon[0].squeeze(0)
+            flow_recon_16 = ((flow_recon_16 - flow_recon_16.min()) / (flow_recon_16.max() - flow_recon_16.min())).detach().cpu().numpy()
+            flow_recon_16 = np.clip(flow_recon_16 * 65535.0, 0, 65535).astype(np.uint16)
+            Image.fromarray(flow_recon_16).save(f"./visualisations/e{epoch}_flow_reconstruction.png")
+
+            tpi_orig_16 = tpi_orig[0].squeeze(0)
+            tpi_orig_16 = ((tpi_orig_16 - tpi_orig_16.min()) / (tpi_orig_16.max() - tpi_orig_16.min())).detach().cpu().numpy()
+            tpi_orig_16 = np.clip(tpi_orig_16 * 65535.0, 0, 65535).astype(np.uint16)
+            Image.fromarray(tpi_orig_16).save(f"./visualisations/e{epoch}_tpi_original.png")
+
+            tpi_recon_16 = tpi_recon[0].squeeze(0)
+            tpi_recon_16 = ((tpi_recon_16 - tpi_recon_16.min()) / (tpi_recon_16.max() - tpi_recon_16.min())).detach().cpu().numpy()
+            tpi_recon_16 = np.clip(tpi_recon_16 * 65535.0, 0, 65535).astype(np.uint16)
+            Image.fromarray(tpi_recon_16).save(f"./visualisations/e{epoch}_tpi_reconstruction.png")
 
         # if epoch % 10 == 0:
             checkpoint = {
                 "vae_state_dict": vae.state_dict(),
                 "optim_vae_state_dict": optim_vae.state_dict(),
                 "scheduler_state_dict": vae_scheduler.state_dict(),
-                "disc_state_dict": disc.state_dict(),
-                "optim_disc_state_dict": optim_disc.state_dict(),
                 "epoch": epoch
             }
             torch.save(checkpoint, f"./checkpoints/VAE_{epoch}.pth")
@@ -250,8 +288,6 @@ if __name__ == "__main__":
         "vae_state_dict": vae.state_dict(),
         "optim_vae_state_dict": optim_vae.state_dict(),
         "scheduler_state_dict": vae_scheduler.state_dict(),
-        "disc_state_dict": disc.state_dict(),
-        "optim_disc_state_dict": optim_disc.state_dict(),
         "epoch": epoch
     }
     torch.save(checkpoint, f"./checkpoints/VAE_{epoch}.pth")
