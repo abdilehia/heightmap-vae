@@ -13,14 +13,16 @@ if __name__ == "__main__":
         v2.ToDtype(torch.float32, scale=True)
     ])
 
-    BASE_DIR = "data/stage1_global_z10"
-    files = [os.path.join(BASE_DIR, file) for file in os.listdir(BASE_DIR)[:15000]]
+    HEIGHT_DIR = './data/stage1_norm'
+    FLOW_DIR = './data/stage1_flow'
+    TPI_DIR  = './data/stage1_tpi'
+    files = [(os.path.join(HEIGHT_DIR, file), os.path.join(FLOW_DIR, file), os.path.join(TPI_DIR, file)) for file in os.listdir(HEIGHT_DIR) if file.endswith('.tif')]
     dataset = MyDataset(files, data_transforms)
     loader = DataLoader(dataset, num_workers=4, prefetch_factor=4, batch_size=128)
 
 
     vae = VAE().to(device)
-    vae.load_state_dict(torch.load("./checkpoints/VAE/VAE_30.pth")["vae_state_dict"])
+    vae.load_state_dict(torch.load("./checkpoints/VAE_75.pth")["vae_state_dict"])
     vae.eval()
 
     latents = []

@@ -346,13 +346,18 @@ if __name__ == "__main__":
 
     dataset = TensorDataset(clean_latents)
     loader = DataLoader(dataset, batch_size=64, shuffle=True, drop_last=True)
-    unet = UNet().train().to(device)
+    unet = UNet(in_channels=16).train().to(device)
+
     scheduler = DDPMScheduler()
 
     mse_loss = nn.MSELoss()
-    optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-4, weight_decay=1e-4)
+    l1_loss = nn.L1Loss()
+    l1_weight = 0.8
+    optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-5, weight_decay=1e-4)
+
 
     accumulation_steps = 2
+    epoch = 0
     epochs = 400
     total_steps = (len(loader) // accumulation_steps) * epochs
 
@@ -364,7 +369,14 @@ if __name__ == "__main__":
                     anneal_strategy='cos'
                    )
     
-    for epoch in range(epochs):
+    # checkpoint = torch.load("./checkpoints/UNet/UNet_250.pth", map_location=device)
+    # unet.load_state_dict(checkpoint["model_state_dict"])
+    # optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    # lr_scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    # epoch = checkpoint["epoch"] + 1
+
+
+    for epoch in range(epoch, epochs):
 
         print(f"Epoch {epoch}/{epochs}", end="\n\n")
         total_loss = 0
@@ -377,7 +389,7 @@ if __name__ == "__main__":
             noisy_latents = scheduler.add_noise(latents, noise, timesteps)
 
             predicted_noise = unet(noisy_latents, timesteps)
-            loss = mse_loss(predicted_noise, noise)
+            loss = l1_weight * l1_loss(predicted_noise, noise) + (1 - l1_weight) * mse_loss(predicted_noise, noise)
 
             loss_val = loss.item()
             total_loss += loss_val

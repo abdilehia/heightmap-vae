@@ -18,10 +18,10 @@ if __name__ == "__main__":
     print("Std:", latent_std)
     
     vae = VAE().to(device)
-    vae.load_state_dict(torch.load("./checkpoints/VAE/VAE_30.pth", map_location=device)["vae_state_dict"])
+    vae.load_state_dict(torch.load("./checkpoints/VAE_75.pth", map_location=device)["vae_state_dict"])
     vae.eval()
 
-    unet = UNet().to(device)
+    unet = UNet(in_channels=16).to(device)
     unet.load_state_dict(torch.load("./checkpoints/UNet/UNet_400.pth", map_location=device)["model_state_dict"])
     unet.eval()
 
@@ -30,8 +30,8 @@ if __name__ == "__main__":
     print("Generating heightmap")
     
     with torch.no_grad():
-        latent = torch.randn((1, 4, 32, 32), device=device)
-
+        latent = torch.randn((1, 16, 32, 32), device=device)
+        # latent = torch.nn.functional.interpolate(latent, (32, 32), mode="bicubic", align_corners=False)
         for t in reversed(range(scheduler.num_train_timesteps)):
             if t % 100 == 0:
                 print(f"Denoising step: {t}")
@@ -43,10 +43,20 @@ if __name__ == "__main__":
         print("Denoising finished.")
 
         latent = (latent * latent_std) + latent_mean
-        generated_heightmap = vae.decode(latent)
+        height, flow, tpi = vae.decode(latent)
+        
+    # height = height.clamp(min=height.quantile(0.02), max=height.quantile(0.98))
+    # flow = flow.clamp(min=flow.quantile(0.02), max=flow.quantile(0.98))
+    # tpi = tpi.clamp(min=tpi.quantile(0.02), max=tpi.quantile(0.98))
 
-    img_tensor = generated_heightmap.squeeze().cpu().numpy()
+    img_tensor = ((height - height.min()) / (height.max() - height.min())).detach().squeeze().cpu().numpy()
     img_16bit = np.clip(img_tensor * 65535.0, 0, 65535).astype(np.uint16)
+    Image.fromarray(img_16bit).save("./output/vae/height.png")
+    img_tensor = ((flow - flow.min()) / (flow.max() - flow.min())).detach().squeeze().cpu().numpy()
+    img_16bit = np.clip(img_tensor * 65535.0, 0, 65535).astype(np.uint16)
+    Image.fromarray(img_16bit).save("./output/vae/flow.png")
+    img_tensor = ((tpi - tpi.min()) / (tpi.max() - tpi.min())).detach().squeeze().cpu().numpy()
+    img_16bit = np.clip(img_tensor * 65535.0, 0, 65535).astype(np.uint16)
+    Image.fromarray(img_16bit).save("./output/vae/tpi.png")
     
-    Image.fromarray(img_16bit).save("/output/vae/heightmap.png")
     print("Saved to /output/vae/heightmap.png")
