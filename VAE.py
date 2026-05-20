@@ -1,13 +1,11 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 import os
 
-from torch.optim.lr_scheduler import ConstantLR, LinearLR, CosineAnnealingLR, SequentialLR
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import v2
-from torchvision.io import read_image, write_png, ImageReadMode
 
 import numpy as np
 from PIL import Image
@@ -108,7 +106,6 @@ class MyDataset(Dataset):
         tpi = tpi.clamp(min=torch.quantile(tpi, q=0.02), max=torch.quantile(tpi, q=0.98))
         tpi = (tpi - tpi.min()) / (tpi.max() - tpi.min())
         tpi = tpi * 2 - 1
-
         image_tensor = self.transform(torch.cat([height, flow, tpi], dim=0))
         return image_tensor
     def __len__(self):
@@ -120,7 +117,7 @@ if __name__ == "__main__":
     data_transforms = v2.Compose([
         v2.Resize(256),
         v2.CenterCrop(256),
-        v2.ToDtype(torch.float32, scale=True)
+        v2.ToDtype(torch.float32, scale=False)
     ])
 
     def visualise(x: torch.Tensor, filename: str):
@@ -129,16 +126,14 @@ if __name__ == "__main__":
         x = np.clip(x * 65535.0, 0, 65535).astype(np.uint16)
         Image.fromarray(x).save(f"./visualisations/{filename}")
 
-    # BASE_DIR = "data/stage1_global_z10"
-
     HEIGHT_DIR = './data/stage1_norm'
     FLOW_DIR = './data/stage1_flow'
     TPI_DIR  = './data/stage1_tpi'
-    files = [(os.path.join(HEIGHT_DIR, file), os.path.join(FLOW_DIR, file), os.path.join(TPI_DIR, file)) for file in os.listdir(HEIGHT_DIR) if file.endswith('.tif')]
+
+    files = [(os.path.join(HEIGHT_DIR, file), os.path.join(FLOW_DIR, file), os.path.join(TPI_DIR, file)) for file in os.listdir(FLOW_DIR) if file.endswith('.tif')]
     dataset = MyDataset(files, data_transforms)
     loader = DataLoader(dataset, batch_size=32, num_workers=4, prefetch_factor=4, shuffle=True, drop_last=True)
     # loader = DataLoader(dataset, batch_size=10)
-
 
     vae = VAE().train().to(device)
     
@@ -163,30 +158,27 @@ if __name__ == "__main__":
         milestones=[warmup_epochs]
     )
 
-    # checkpoint = torch.load("./checkpoints/VAE_40.pth", weights_only=False)
+    # checkpoint = torch.load("./checkpoints/VAE_5.pth", weights_only=False)
     # vae.load_state_dict(checkpoint["vae_state_dict"])
     # optim_vae.load_state_dict(checkpoint["optim_vae_state_dict"])
     # vae_scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     # epoch = checkpoint["epoch"] + 1
 
-
     for epoch in range(epoch, total_epochs):
         print(f"Epoch {epoch}:")
-        total_vae_loss_without_gan = 0
         total_vae_loss = 0
-        total_disc_loss = 0
         for batch_idx, images in enumerate(loader):
 
             # VAE training
             optim_vae.zero_grad()
 
             images = images.to(device)
-            recons, mu, log_var = vae(images)
-            height_recon, flow_recon, tpi_recon = recons
-
             height_orig = images[:, 0:1]
             flow_orig = images[:, 1:2]
             tpi_orig = images[:, 2:3]
+
+            recons, mu, log_var = vae(images)
+            height_recon, flow_recon, tpi_recon = recons
 
             height_loss = l1_weight * l1_loss(height_recon, height_orig) + (1 - l1_weight) * l2_loss(height_recon, height_orig)
             flow_loss = l1_weight * l1_loss(flow_recon, flow_orig) + (1 - l1_weight) * l2_loss(flow_recon, flow_orig)
@@ -195,14 +187,12 @@ if __name__ == "__main__":
             height_loss_val = height_loss.item()
             flow_loss_val = flow_loss.item()
             tpi_loss_val = tpi_loss.item()
+            final_loss_val = height_loss_val + flow_loss_val + tpi_loss_val
 
             height_loss = 0.5*torch.exp(-vae.s1) * height_loss + 0.5*vae.s1
             flow_loss = 0.5*torch.exp(-vae.s2) * flow_loss + 0.5*vae.s2
             tpi_loss = 0.5*torch.exp(-vae.s3) * tpi_loss + 0.5*vae.s3
 
-            height_loss = height_loss.mean()
-            flow_loss = flow_loss.mean()
-            tpi_loss = tpi_loss.mean()
             
             kl_loss = -0.5 * torch.mean(1 + log_var - mu.pow(2) - log_var.exp())
             mtl_loss = height_loss + flow_loss + tpi_loss
@@ -214,27 +204,27 @@ if __name__ == "__main__":
             vae_loss.backward()
             optim_vae.step()
 
-            if batch_idx % 20 == 0:
-                print(f"Batch {batch_idx}/{len(loader)}:")
-                print(f"VAE Loss = {vae_loss_val}.")
+            if (batch_idx + 1) % 20 == 0:
+                print(f"Batch {batch_idx + 1}/{len(loader)}:")
+                print(f"VAE Loss = {final_loss_val}.")
                 print(f"Height Loss = {height_loss_val}")
                 print(f"Height (sigma) = {vae.s1.item()}")
                 print(f"Flow Loss = {flow_loss_val}")
                 print(f"Flow (sigma) = {vae.s2.item()}")
                 print(f"TPI Loss = {tpi_loss_val}")
-                print(f"TPI (sigma) = {vae.s3.item()}")
+                print(f"TPI (sigma) = {vae.s3.item()}", end="\n\n")
 
         vae_scheduler.step()
         print(f"Avg VAE loss = {total_vae_loss / len(loader)}", end="\n\n")
 
-        if epoch % 5 == 0:
-            print(f"Saving checkpoint 'VAE_{epoch}.pth'")
-            visualise(height_orig[0], filename=f"e{epoch}_height_original.png")
-            visualise(height_recon[0], filename=f"e{epoch}_height_reconstruction.png")
-            visualise(flow_orig[0], filename=f"e{epoch}_flow_original.png")
-            visualise(flow_recon[0], filename=f"e{epoch}_flow_reconstruction.png")
-            visualise(tpi_orig[0], filename=f"e{epoch}_tpi_original.png")
-            visualise(tpi_recon[0], filename=f"e{epoch}_tpi_reconstruction.png")
+        if (epoch + 1) % 5 == 0:
+            print(f"Saving checkpoint 'VAE_{epoch + 1}.pth'")
+            visualise(height_orig[0], filename=f"e{epoch + 1}_height_original.png")
+            visualise(height_recon[0], filename=f"e{epoch + 1}_height_reconstruction.png")
+            visualise(flow_orig[0], filename=f"e{epoch + 1}_flow_original.png")
+            visualise(flow_recon[0], filename=f"e{epoch + 1}_flow_reconstruction.png")
+            visualise(tpi_orig[0], filename=f"e{epoch + 1}_tpi_original.png")
+            visualise(tpi_recon[0], filename=f"e{epoch + 1}_tpi_reconstruction.png")
 
         # if epoch % 10 == 0:
             checkpoint = {
@@ -243,7 +233,7 @@ if __name__ == "__main__":
                 "scheduler_state_dict": vae_scheduler.state_dict(),
                 "epoch": epoch
             }
-            torch.save(checkpoint, f"./checkpoints/VAE_{epoch}.pth")
+            torch.save(checkpoint, f"./checkpoints/VAE_{epoch + 1}.pth")
 
     print("Finished training.")
 
@@ -253,5 +243,5 @@ if __name__ == "__main__":
         "scheduler_state_dict": vae_scheduler.state_dict(),
         "epoch": epoch
     }
-    torch.save(checkpoint, f"./checkpoints/VAE_{epoch}.pth")
+    torch.save(checkpoint, f"./checkpoints/VAE_{epoch + 1}.pth")
     torch.save(vae.state_dict(), "./checkpoints/VAE.pth")

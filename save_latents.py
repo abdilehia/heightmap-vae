@@ -22,13 +22,16 @@ if __name__ == "__main__":
 
 
     vae = VAE().to(device)
-    vae.load_state_dict(torch.load("./checkpoints/VAE_75.pth")["vae_state_dict"])
+    vae.load_state_dict(torch.load("./checkpoints/Attempt 4/VAE_75.pth")["vae_state_dict"])
     vae.eval()
 
     latents = []
     for batch_idx, images in enumerate(loader):
         with torch.no_grad():
             images = images.to(device)
+            # norm_orig = images[:, 0:1]
+            # flow_orig = images[:, 1:2]
+            # tpi_orig = images[:, 2:3]
 
             mu, log_var = vae.encode(images)
             z = vae.reparameterize(mu, log_var)
