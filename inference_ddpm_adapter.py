@@ -25,7 +25,7 @@ if __name__ == "__main__":
     vae.eval()
 
     unet = ConditionedUNet(in_channels=16).to(device)
-    unet.load_state_dict(torch.load("./checkpoints/Attempt 4/UNet/UNet_30_Conditioned.pth", map_location=device)["model_state_dict"])
+    unet.load_state_dict(torch.load("./checkpoints/Attempt 4/UNet/UNet_25_Conditioned_32x32.pth", map_location=device)["model_state_dict"])
     unet.eval()
 
     scheduler = DDPMScheduler()
@@ -34,8 +34,8 @@ if __name__ == "__main__":
 
     elevation_hint = decode_image('./output/UNet/test_el.png', ImageReadMode.GRAY).to(device).float() / 255.0
     roughness_hint = decode_image('./output/UNet/test_ro.png', ImageReadMode.GRAY).to(device).float() / 255.0
-    # elevation_hint = elevation_hint / 4.0
-    roughness_hint = roughness_hint / 8.0
+    elevation_hint = elevation_hint
+    roughness_hint = roughness_hint / 1.0
     hints = torch.cat([elevation_hint, roughness_hint], dim=0).unsqueeze(0)
     
     with torch.no_grad():

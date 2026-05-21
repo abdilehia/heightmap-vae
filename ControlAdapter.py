@@ -78,9 +78,18 @@ from UNet import UNet, DDPMScheduler
 class Adapter(nn.Module):
     def __init__ (self, in_channels:int=2):
         super().__init__()
+
         self.expand1 = nn.Sequential(
             nn.Conv2d(in_channels, 64, kernel_size=3, padding=1),
-            nn.SiLU(),
+            nn.SiLU()
+        )
+        
+        self.downsample1 = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1),
+            nn.SiLU()
+        )
+        
+        self.expand2 = nn.Sequential(
             nn.Conv2d(64, 256, kernel_size=3, padding=1),
             nn.SiLU()
         )
@@ -90,12 +99,12 @@ class Adapter(nn.Module):
         if self.zero_conv1.bias is not None:
             nn.init.zeros_(self.zero_conv1.bias)
 
-        self.downsample1 = nn.Sequential(
+        self.downsample2 = nn.Sequential(
             nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1),
             nn.SiLU()
         )
 
-        self.expand2 = nn.Sequential(
+        self.expand3 = nn.Sequential(
             nn.Conv2d(256, 512, kernel_size=3, padding=1),
             nn.SiLU()
         )
@@ -108,12 +117,15 @@ class Adapter(nn.Module):
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, ...]:
         outputs: list[torch.Tensor] = []
         x = self.expand1(x)
-        x = self.zero_conv1(x)
-
-        outputs.append(x)
         x = self.downsample1(x)
 
         x = self.expand2(x)
+        x = self.zero_conv1(x)
+
+        outputs.append(x)
+        x = self.downsample2(x)
+
+        x = self.expand3(x)
         x = self.zero_conv2(x)
 
         outputs.append(x)
@@ -227,7 +239,7 @@ if __name__ == "__main__":
     optimizer = torch.optim.AdamW(unet.parameters(), lr=1e-4, weight_decay=1e-2)
 
     epoch = 0
-    epochs = 50
+    epochs = 35
     total_steps = len(loader) * epochs
     lr_scheduler = OneCycleLR(
                     optimizer,
@@ -239,7 +251,7 @@ if __name__ == "__main__":
     
     checkpoint = torch.load("./checkpoints/Attempt 4/UNet/UNet_400.pth", map_location=device)
     missing_keys, unexpected_keys = unet.load_state_dict(checkpoint["model_state_dict"], strict=False)
-    expected_missing_keys = ["adapter.expand1.0.weight", "adapter.expand1.0.bias", "adapter.expand1.2.weight", "adapter.expand1.2.bias", "adapter.expand2.0.weight", "adapter.expand2.0.bias", "adapter.downsample1.0.weight", "adapter.downsample1.0.bias", "adapter.downsample2.0.weight", "adapter.downsample2.0.bias", "adapter.zero_conv1.weight", "adapter.zero_conv1.bias", "adapter.zero_conv2.weight", "adapter.zero_conv2.bias"]
+    expected_missing_keys = ["adapter.expand1.0.weight", "adapter.expand1.0.bias", "adapter.expand1.2.weight", "adapter.expand1.2.bias", "adapter.expand2.0.weight", "adapter.expand2.0.bias", "adapter.downsample1.0.weight", "adapter.downsample1.0.bias", "adapter.downsample2.0.weight", "adapter.downsample2.0.bias", "adapter.zero_conv1.weight", "adapter.zero_conv1.bias", "adapter.zero_conv2.weight", "adapter.zero_conv2.bias", "adapter.expand3.0.weight", "adapter.expand3.0.bias"]
 
     for key in missing_keys:
         if key not in expected_missing_keys:
