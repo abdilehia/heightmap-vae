@@ -11,9 +11,7 @@ from torchvision.io.image import decode_image
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    data = torch.load("./adapter_map_tensors.pt", weights_only=False)
-
-    clean_latents = data["latents"]
+    data = torch.load("./latents_mean_std.pt", weights_only=False)
     latent_std = data["std"].item()
     latent_mean = data["mean"].item()
     
@@ -21,19 +19,18 @@ if __name__ == "__main__":
     print("Std:", latent_std)
     
     vae = VAE().to(device)
-    vae.load_state_dict(torch.load("./checkpoints/Attempt 4/VAE/VAE_75.pth", map_location=device)["vae_state_dict"])
+    vae.load_state_dict(torch.load("./checkpoints/VAE.pth", map_location=device)["vae_state_dict"])
     vae.eval()
 
     unet = ConditionedUNet(in_channels=16).to(device)
-    unet.load_state_dict(torch.load("./checkpoints/Attempt 4/UNet/UNet_25_Conditioned_32x32.pth", map_location=device)["model_state_dict"])
+    unet.load_state_dict(torch.load("./checkpoints/UNet+Adapter_32x32.pth", map_location=device)["model_state_dict"])
     unet.eval()
 
     scheduler = DDPMScheduler()
-    print(clean_latents.shape)
     print("Generating heightmap")
 
-    elevation_hint = decode_image('./output/UNet/test_el.png', ImageReadMode.GRAY).to(device).float() / 255.0
-    roughness_hint = decode_image('./output/UNet/test_ro.png', ImageReadMode.GRAY).to(device).float() / 255.0
+    elevation_hint = decode_image('./output/test_el.png', ImageReadMode.GRAY).to(device).float() / 255.0
+    roughness_hint = decode_image('./output/test_ro.png', ImageReadMode.GRAY).to(device).float() / 255.0
     elevation_hint = elevation_hint
     roughness_hint = roughness_hint / 1.0
     hints = torch.cat([elevation_hint, roughness_hint], dim=0).unsqueeze(0)
@@ -56,12 +53,12 @@ if __name__ == "__main__":
 
     img_tensor = ((height - height.min()) / (height.max() - height.min())).detach().squeeze().cpu().numpy()
     img_16bit = np.clip(img_tensor * 65535.0, 0, 65535).astype(np.uint16)
-    Image.fromarray(img_16bit).save("./output/UNet/height.png")
+    Image.fromarray(img_16bit).save("./output/height.png")
     img_tensor = ((flow - flow.min()) / (flow.max() - flow.min())).detach().squeeze().cpu().numpy()
     img_16bit = np.clip(img_tensor * 65535.0, 0, 65535).astype(np.uint16)
-    Image.fromarray(img_16bit).save("./output/UNet/flow.png")
+    Image.fromarray(img_16bit).save("./output/flow.png")
     img_tensor = ((tpi - tpi.min()) / (tpi.max() - tpi.min())).detach().squeeze().cpu().numpy()
     img_16bit = np.clip(img_tensor * 65535.0, 0, 65535).astype(np.uint16)
-    Image.fromarray(img_16bit).save("./output/UNet/tpi.png")
+    Image.fromarray(img_16bit).save("./output/tpi.png")
     
-    print("Saved to /output/UNet/heightmap.png")
+    print("Saved to /output/")
