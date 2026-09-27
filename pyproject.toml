@@ -1,0 +1,21 @@
+[project]
+name = "heightmap-vae"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "mercantile>=1.2.1",
+    "numpy>=2.2.6",
+    "pillow>=12.1.1",
+    "rasterio>=1.4.4",
+    "requests>=2.32.5",
+    "torch>=2.6.0",
+    "torchinfo>=1.8.0",
+    "torchvision>=0.21.0",
+]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
