@@ -1,0 +1,3 @@
+Pipeline for generating "realistic" terrain heightmaps using image diffusion style architecture. Consists of a VAE, UNet for diffusion and a simple adapter for conditioned generation using low-resolution hint images. The data used was sourced from AWS Open Data. Some code was created with the assistance of AI and the respective files will include a disclaimer at the top.
+
+The weights for these models can be found [here](https://huggingface.co/abdilehia/terrain-diffusion). Should just be placed in a 'checkpoints' folder inside the main directory. Setup should be as simple as downloading weights and doing 'uv sync' (if you have uv installed). Otherwise you should be able to create a virtual environment and do 'pip install -r pyproject.toml'.
